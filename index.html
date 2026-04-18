@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drummer Monitor Pro</title>
+    <style>
+        body { font-family: sans-serif; background: #1a1a1a; color: white; text-align: center; padding: 20px; }
+        .control-group { background: #333; margin: 15px auto; padding: 20px; border-radius: 10px; max-width: 400px; }
+        input[type=range] { width: 100%; margin: 10px 0; }
+        button { background: #00ff88; border: none; padding: 15px 30px; font-size: 18px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        button.stop { background: #ff4444; }
+        label { display: block; margin-top: 10px; font-size: 14px; color: #aaa; }
+    </style>
+</head>
+<body>
+
+    <h1>🥁 Drummer Monitor</h1>
+
+    <button id="startBtn">INICIAR SISTEMA</button>
+
+    <div class="control-group">
+        <h3>⏱️ Metrónomo</h3>
+        <label>Tempo: <span id="bpmVal">120</span> BPM</label>
+        <input type="range" id="bpm" min="40" max="220" value="120">
+        
+        <label>Balance (L <-> R)</label>
+        <input type="range" id="metronomePan" min="-1" max="1" step="0.1" value="0">
+        
+        <label>Volumen</label>
+        <input type="range" id="metronomeVol" min="0" max="1" step="0.1" value="0.5">
+    </div>
+
+    <div class="control-group">
+        <h3>🎤 Monitor Micrófono</h3>
+        <label>Balance (L <-> R)</label>
+        <input type="range" id="micPan" min="-1" max="1" step="0.1" value="0">
+        
+        <label>Volumen Entrada</label>
+        <input type="range" id="micVol" min="0" max="2" step="0.1" value="1">
+    </div>
+
+    <script>
+        let audioCtx;
+        let isPlaying = false;
+        let nextNoteTime = 0.0;
+        let timerID;
+
+        // Nodos de Audio
+        let metronomeGain;
+        let metronomePanner;
+        let micGain;
+        let micPanner;
+
+        const startBtn = document.getElementById('startBtn');
+
+        // Inicializar Audio
+        async function initAudio() {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // Config Metrónomo
+            metronomeGain = audioCtx.createGain();
+            metronomePanner = audioCtx.createStereoPanner();
+            metronomePanner.connect(audioCtx.destination);
+            metronomeGain.connect(metronomePanner);
+
+            // Config Micrófono
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } });
+                const micSource = audioCtx.createMediaStreamSource(stream);
+                micGain = audioCtx.createGain();
+                micPanner = audioCtx.createStereoPanner();
+                
+                micSource.connect(micGain);
+                micGain.connect(micPanner);
+                micPanner.connect(audioCtx.destination);
+            } catch (err) {
+                alert("Error al acceder al micrófono: " + err);
+            }
+        }
+
+        function scheduler() {
+            while (nextNoteTime < audioCtx.currentTime + 0.1) {
+                playClick(nextNoteTime);
+                nextNoteTime += 60.0 / document.getElementById('bpm').value;
+            }
+            timerID = setTimeout(scheduler, 25);
+        }
+
+        function playClick(time) {
+            const osc = audioCtx.createOscillator();
+            osc.connect(metronomeGain);
+            osc.frequency.value = 1000;
+            osc.start(time);
+            osc.stop(time + 0.05);
+        }
+
+        startBtn.addEventListener('click', async () => {
+            if (!audioCtx) await initAudio();
+
+            if (!isPlaying) {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                isPlaying = true;
+                nextNoteTime = audioCtx.currentTime;
+                scheduler();
+                startBtn.textContent = "DETENER";
+                startBtn.classList.add('stop');
+            } else {
+                clearTimeout(timerID);
+                isPlaying = false;
+                startBtn.textContent = "INICIAR SISTEMA";
+                startBtn.classList.remove('stop');
+            }
+        });
+
+        // Actualizar valores en tiempo real
+        document.getElementById('bpm').oninput = (e) => document.getElementById('bpmVal').innerText = e.target.value;
+        document.getElementById('metronomeVol').oninput = (e) => metronomeGain.gain.value = e.target.value;
+        document.getElementById('metronomePan').oninput = (e) => metronomePanner.pan.value = e.target.value;
+        document.getElementById('micVol').oninput = (e) => micGain.gain.value = e.target.value;
+        document.getElementById('micPan').oninput = (e) => micPanner.pan.value = e.target.value;
+
+    </script>
+</body>
+</html>
