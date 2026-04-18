@@ -39,86 +39,134 @@
         <label>Volumen Entrada</label>
         <input type="range" id="micVol" min="0" max="2" step="0.1" value="1">
     </div>
-
+    
     <script>
         let audioCtx;
         let isPlaying = false;
         let nextNoteTime = 0.0;
         let timerID;
+        let currentBeat = 0; // Lleva la cuenta de los pulsos para el acento
 
-        // Nodos de Audio
+        // Nodos de Audio para Metrónomo y Micrófono
         let metronomeGain;
         let metronomePanner;
         let micGain;
         let micPanner;
 
-        const startBtn = document.getElementById('startBtn');
+       const startBtn = document.getElementById('startBtn');
 
-        // Inicializar Audio
-        async function initAudio() {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+       // Inicialización del sistema de audio
+       async function initAudio() {
+           const AudioContext = window.AudioContext || window.webkitAudioContext;
+           audioCtx = new AudioContext();
+        
+           // 1. Configuración de salida del Metrónomo
+           metronomeGain = audioCtx.createGain();
+           metronomePanner = audioCtx.createStereoPanner();
+           metronomeGain.connect(metronomePanner);
+           metronomePanner.connect(audioCtx.destination);
+
+           // 2. Configuración de entrada del Micrófono
+           try {
+               const constraints = { 
+                   audio: { 
+                       echoCancellation: false, 
+                       noiseSuppression: false,
+                       autoGainControl: false 
+                   } 
+               };
+               const stream = await navigator.mediaDevices.getUserMedia(constraints);
+               const micSource = audioCtx.createMediaStreamSource(stream);
             
-            // Config Metrónomo
-            metronomeGain = audioCtx.createGain();
-            metronomePanner = audioCtx.createStereoPanner();
-            metronomePanner.connect(audioCtx.destination);
-            metronomeGain.connect(metronomePanner);
-
-            // Config Micrófono
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } });
-                const micSource = audioCtx.createMediaStreamSource(stream);
-                micGain = audioCtx.createGain();
-                micPanner = audioCtx.createStereoPanner();
-                
-                micSource.connect(micGain);
-                micGain.connect(micPanner);
-                micPanner.connect(audioCtx.destination);
+               micGain = audioCtx.createGain();
+               micPanner = audioCtx.createStereoPanner();
+            
+               micSource.connect(micGain);
+               micGain.connect(micPanner);
+               micPanner.connect(audioCtx.destination);
+            
+               // Valores iniciales desde los sliders
+               metronomeGain.gain.value = document.getElementById('metronomeVol').value;
+               micGain.gain.value = document.getElementById('micVol').value;
             } catch (err) {
-                alert("Error al acceder al micrófono: " + err);
-            }
-        }
+               console.error("Error de acceso:", err);
+               alert("¡Ups! Revisa que estés usando HTTPS o que diste permisos al micro.");
+           }
+       }
 
-        function scheduler() {
-            while (nextNoteTime < audioCtx.currentTime + 0.1) {
-                playClick(nextNoteTime);
-                nextNoteTime += 60.0 / document.getElementById('bpm').value;
-            }
-            timerID = setTimeout(scheduler, 25);
-        }
+       // El "Reloj" que programa los sonidos a futuro
+       function scheduler() {
+           while (nextNoteTime < audioCtx.currentTime + 0.1) {
+               playClick(nextNoteTime);
+               advanceNote();
+           }
+           timerID = setTimeout(scheduler, 25);
+       }
 
-        function playClick(time) {
-            const osc = audioCtx.createOscillator();
-            osc.connect(metronomeGain);
-            osc.frequency.value = 1000;
-            osc.start(time);
-            osc.stop(time + 0.05);
-        }
+       // Calcula cuándo debe sonar el siguiente pulso
+       function advanceNote() {
+           const tempo = document.getElementById('bpm').value;
+           const secondsPerBeat = 60.0 / tempo;
+           nextNoteTime += secondsPerBeat; // Añade el tiempo del siguiente pulso
 
-        startBtn.addEventListener('click', async () => {
-            if (!audioCtx) await initAudio();
+           // Avanza el contador de pulsos (Beat Counter)
+           const beatsPerMeasure = parseInt(document.getElementById('beatsPerMeasure').value);
+           currentBeat++;
+           if (currentBeat >= beatsPerMeasure) {
+               currentBeat = 0; // Reinicia el compás
+           }
+       }
 
-            if (!isPlaying) {
-                if (audioCtx.state === 'suspended') audioCtx.resume();
-                isPlaying = true;
-                nextNoteTime = audioCtx.currentTime;
-                scheduler();
-                startBtn.textContent = "DETENER";
-                startBtn.classList.add('stop');
-            } else {
-                clearTimeout(timerID);
-                isPlaying = false;
-                startBtn.textContent = "INICIAR SISTEMA";
-                startBtn.classList.remove('stop');
-            }
-        });
+       // Genera el sonido del Click
+       function playClick(time) {
+           const osc = audioCtx.createOscillator();
+           const clickGain = audioCtx.createGain();
 
-        // Actualizar valores en tiempo real
-        document.getElementById('bpm').oninput = (e) => document.getElementById('bpmVal').innerText = e.target.value;
-        document.getElementById('metronomeVol').oninput = (e) => metronomeGain.gain.value = e.target.value;
-        document.getElementById('metronomePan').oninput = (e) => metronomePanner.pan.value = e.target.value;
-        document.getElementById('micVol').oninput = (e) => micGain.gain.value = e.target.value;
-        document.getElementById('micPan').oninput = (e) => micPanner.pan.value = e.target.value;
+           osc.connect(clickGain);
+           clickGain.connect(metronomeGain);
+
+           // LÓGICA DE FRECUENCIA: 1500Hz para el primer beat, 1000Hz para los demás
+           if (currentBeat === 0) {
+               osc.frequency.value = 1500;
+           } else {
+               osc.frequency.value = 1000;
+           }
+
+           // Envolvente rápida para evitar "pops" (clics eléctricos molestos)
+           clickGain.gain.setValueAtTime(0, time);
+           clickGain.gain.linearRampToValueAtTime(1, time + 0.001);
+           clickGain.gain.exponentialRampToValueAtTime(0.001, time + 0.04);
+
+           osc.start(time);
+           osc.stop(time + 0.05);
+       }
+
+       // Control del botón de Inicio/Parada
+       startBtn.addEventListener('click', async () => {
+           if (!audioCtx) await initAudio();
+
+           if (!isPlaying) {
+               if (audioCtx.state === 'suspended') await audioCtx.resume();
+               isPlaying = true;
+               currentBeat = 0; // Empezamos en el "1"
+               nextNoteTime = audioCtx.currentTime;
+               scheduler();
+               startBtn.textContent = "🛑 DETENER";
+               startBtn.classList.add('stop');
+           } else {
+               clearTimeout(timerID);
+               isPlaying = false;
+               startBtn.textContent = "🥁 INICIAR SISTEMA";
+               startBtn.classList.remove('stop');
+           }
+       });
+
+       // Escuchadores para los controles deslizantes (UI)
+       document.getElementById('bpm').oninput = (e) => document.getElementById('bpmVal').innerText = e.target.value;
+       document.getElementById('metronomeVol').oninput = (e) => metronomeGain.gain.value = e.target.value;
+       document.getElementById('metronomePan').oninput = (e) => metronomePanner.pan.value = e.target.value;
+       document.getElementById('micVol').oninput = (e) => micGain.gain.value = e.target.value;
+       document.getElementById('micPan').oninput = (e) => micPanner.pan.value = e.target.value;
 
     </script>
 </body>
